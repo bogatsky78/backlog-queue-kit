@@ -1,4 +1,6 @@
-# queue-kit — черга задач на Backlog.md, готова до перенесення
+# backlog-queue-kit — черга задач на Backlog.md, готова до перенесення
+
+<https://github.com/bogatsky78/backlog-queue-kit>
 
 Комплект, який ставить у проєкт чергу задач: **скіл, гачок, п'ять команд і
 обгортку CLI**. Двигун — [Backlog.md](https://github.com/MrLesk/Backlog.md)
