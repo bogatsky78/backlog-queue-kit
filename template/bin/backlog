@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Wrapper around the Backlog.md CLI, which drives the project task queue.
+#
+# We run it from source at a pinned tag instead of installing the npm package:
+# `npm i -g backlog.md` ships a ~101 MB standalone Bun binary, which is neither
+# readable nor patchable. The clone lives next to the project, not inside it.
+#
+# Setup (see .claude/skills/queue/SKILL.md):
+#   git clone --branch v1.50.1 --depth 1 https://github.com/MrLesk/Backlog.md.git /data/backlog.md
+#   cd /data/backlog.md && bun install --frozen-lockfile --omit=optional
+#
+# `--omit=optional` skips the six per-platform standalone binaries; the CLI runs
+# fine without them and the install drops from 927 MB to 442 MB.
+set -euo pipefail
+
+BACKLOG_MD_HOME="${BACKLOG_MD_HOME:-/data/backlog.md}"
+BACKLOG_MD_TAG="v1.50.1"
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ ! -f "$BACKLOG_MD_HOME/src/cli.ts" ]]; then
+	echo "bin/backlog: no Backlog.md checkout at $BACKLOG_MD_HOME" >&2
+	echo "  git clone --branch $BACKLOG_MD_TAG --depth 1 https://github.com/MrLesk/Backlog.md.git $BACKLOG_MD_HOME" >&2
+	echo "  cd $BACKLOG_MD_HOME && bun install --frozen-lockfile --omit=optional" >&2
+	exit 1
+fi
+
+if [[ ! -d "$BACKLOG_MD_HOME/node_modules" ]]; then
+	echo "bin/backlog: dependencies not installed in $BACKLOG_MD_HOME" >&2
+	echo "  cd $BACKLOG_MD_HOME && bun install --frozen-lockfile --omit=optional" >&2
+	exit 1
+fi
+
+# The pin is the point: an upgrade silently reshuffles the file layout under
+# every task, so drifting off the tag has to be loud rather than convenient.
+checked_out="$(git -C "$BACKLOG_MD_HOME" describe --tags --exact-match 2>/dev/null || echo "")"
+if [[ "$checked_out" != "$BACKLOG_MD_TAG" ]]; then
+	echo "bin/backlog: $BACKLOG_MD_HOME is not on $BACKLOG_MD_TAG (found: ${checked_out:-detached/unknown})" >&2
+	echo "  either check the tag back out, or update BACKLOG_MD_TAG here deliberately" >&2
+	exit 1
+fi
+
+# BACKLOG_CWD makes the queue independent of where the CLI was called from:
+# every invocation targets this repository's backlog/ directory. That in turn
+# frees us to run from the checkout, which is where the CLI looks for its own
+# package.json (called by absolute path it reports version 0.0.0).
+export BACKLOG_CWD="$PROJECT_ROOT"
+
+cd "$BACKLOG_MD_HOME"
+exec bun src/cli.ts "$@"

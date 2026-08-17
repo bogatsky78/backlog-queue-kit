@@ -1,0 +1,25 @@
+{
+  "_comment": "Два блоки, які install.sh або ви руками зливаєте у <проєкт>/.claude/settings.json. Шлях гачка через $CLAUDE_PROJECT_DIR — переносний, правити не треба.",
+
+  "permissions": {
+    "allow": [
+      "Bash(bin/backlog:*)",
+      "Bash(./bin/backlog:*)"
+    ]
+  },
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/enforce-queue-cli.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
