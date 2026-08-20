@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Ставить і оновлює чергу задач на Backlog.md у вказаному проєкті.
+# Ставить і оновлює чергу задач на Backlog.md у проєкті.
 #
-#   ./install.sh [--dry-run] /шлях/до/проєкту
+#   ./install.sh [--dry-run] [--no-unit] [/шлях/до/проєкту]
 #       Перше встановлення. Наявних файлів НЕ ЧІПАЄ — перелічує в кінці.
 #
-#   ./install.sh --update [--dry-run] [--force] /шлях/до/проєкту
+#   ./install.sh --update [--dry-run] [--force] [--no-unit] [/шлях/до/проєкту]
 #       Оновлення. Перезаписує файли комплекту (обгортка, гачок, тести,
 #       команди, скіл) і не торкається проєктного: .claude/queue-project.md,
 #       .claude/settings.json (тільки злиття), backlog/ (це дані черги).
+#
+# Шлях можна не вказувати. Тоді проєкт — поточна тека, а якщо скрипт запущено
+# зсередини комплекту (комплект склонований у проєкт) — тека над комплектом.
+# Виведений так шлях мусить бути git-репозиторієм: інакше легко поставити чергу
+# на пів каталогу вище й не помітити.
+#
+# Наприкінці скрипт ставить systemd-юніт користувача, який тримає веб-UI черги
+# піднятим: підбирає вільний порт, закріплює його за проєктом і вмикає сервіс.
+# --no-unit це пропускає.
 #
 # Що вважається «комплектовим» — усе дерево template/, крім явного списку
 # PROJECT_OWNED нижче. Тобто новий файл у комплекті стає оновлюваним сам, і про
@@ -32,25 +41,41 @@ upd()  { printf '  \033[36m~\033[0m %s\n' "$*"; }
 same() { printf '  \033[90m=\033[0m %s\n' "$*"; }
 keep() { printf '  \033[33m=\033[0m %s %s\n' "$1" "${2:-}"; }
 
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 MODE=install
 FORCE=0
 DRY=0
+WANT_UNIT=1
 args=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--update)  MODE=update; shift ;;
 		--force)   FORCE=1; shift ;;
 		--dry-run) DRY=1; shift ;;
+		--no-unit) WANT_UNIT=0; shift ;;
 		-h|--help) usage; exit 0 ;;
 		-*)        die "невідомий ключ: $1" ;;
 		*)         args+=("$1"); shift ;;
 	esac
 done
-[[ ${#args[@]} -eq 1 ]] || { usage; exit 1; }
+[[ ${#args[@]} -le 1 ]] || { usage; exit 1; }
 
-TARGET="$(cd "${args[0]}" 2>/dev/null && pwd)" || die "немає такої теки: ${args[0]}"
+if [[ ${#args[@]} -eq 1 ]]; then
+	TARGET="$(cd "${args[0]}" 2>/dev/null && pwd)" || die "немає такої теки: ${args[0]}"
+else
+	# Без аргументу: зсередини комплекту цілимось на теку над ним (комплект
+	# склонований у проєкт), інакше — на поточну теку.
+	if [[ "$PWD" == "$KIT" || "$PWD" == "$KIT"/* ]]; then
+		TARGET="$(dirname "$KIT")"
+	else
+		TARGET="$PWD"
+	fi
+	# Шлях ніхто не називав уголос, тож потрібна ознака, що це справді проєкт.
+	# Без неї комплект, який лежить не в проєкті, поставив би чергу в /data.
+	[[ -e "$TARGET/.git" ]] || die "не бачу проєкту: $TARGET — не git-репозиторій.
+Вкажіть шлях явно або перейдіть у теку проєкту."
+fi
 [[ "$TARGET" != "$KIT" ]] || die "цільова тека — це сам комплект"
 
 is_project_owned() {
@@ -210,6 +235,117 @@ for line in "backlog/.locks/" ".claude/hooks/*.error.log"; do
 	add ".gitignore: $line"
 done
 
+# --- systemd-юніт для веб-UI ------------------------------------------------
+#
+# Порт живе тут, в ExecStart, а не в backlog/config.yml. Причина принципова:
+# backlog/ — це дані черги, і install.sh у них не пише (див. CLAUDE.md). Побічно
+# це ще й дає реєстр: які порти вже роздані, видно зі списку юнітів, не
+# обходячи всі проєкти на диску.
+#
+# Наслідок, про який варто знати: запущений руками `bin/backlog browser` візьме
+# default_port із конфігу (6420 у всіх), побачить його зайнятим і сяде на
+# сусідній. Сервіс це не зачіпає — у нього порт свій і закріплений.
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+PORT_FROM=6420
+PORT_TO=6520
+
+# Ім'я юніта — з теки проєкту, все стороннє в дефіс: імена юнітів systemd не
+# терплять довільних символів, а кирилиця в них читається як сміття.
+SLUG="$(basename "$TARGET" | tr -c 'A-Za-z0-9_-' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')"
+[[ -n "$SLUG" ]] || SLUG="queue"
+UNIT_NAME="backlog-ui-$SLUG.service"
+
+# Хтось слухає порт просто зараз. Без ss і lsof: bash уміє сам.
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# Порти, закріплені за іншими проєктами. Зупинений UI свій порт не звільняє —
+# інакше новий проєкт забрав би його, і при старті вони побилися б.
+claimed_ports() {
+	local f
+	shopt -s nullglob
+	for f in "$UNIT_DIR"/backlog-ui-*.service; do
+		[[ "$(basename "$f")" == "$UNIT_NAME" ]] && continue
+		sed -n 's/.*--port \([0-9]\{1,5\}\).*/\1/p' "$f"
+	done
+	shopt -u nullglob
+}
+
+echo
+echo "Веб-UI:"
+if [[ $WANT_UNIT -eq 0 ]]; then
+	echo "  (--no-unit — юніт не чіпаю)"
+elif ! command -v systemctl >/dev/null || [[ ! -d /run/systemd/system ]]; then
+	echo "  ! systemd тут немає — юніт не ставлю, UI піднімати руками:"
+	echo "    cd $TARGET && bin/backlog browser --no-open"
+elif ! command -v bun >/dev/null; then
+	echo "  ! bun не знайдено в PATH — юніт не ставлю"
+else
+	unit_path="$UNIT_DIR/$UNIT_NAME"
+
+	# Уже призначений порт не переобираємо: адреса, яку людина поклала в
+	# закладки, не має плавати від кожного оновлення.
+	port=""
+	[[ -f "$unit_path" ]] && port="$(sed -n 's/.*--port \([0-9]\{1,5\}\).*/\1/p' "$unit_path" | head -1)"
+	taken=" $(claimed_ports | tr '\n' ' ') "
+	if [[ -z "$port" || "$taken" == *" $port "* ]]; then
+		port=""
+		for ((p = PORT_FROM; p <= PORT_TO; p++)); do
+			[[ "$taken" == *" $p "* ]] && continue
+			port_busy "$p" && continue
+			port="$p"; break
+		done
+		[[ -n "$port" ]] || die "не знайшов вільного порту в діапазоні $PORT_FROM-$PORT_TO"
+	fi
+
+	if [[ $DRY -eq 1 ]]; then
+		echo "  (пробний прогін) поставив би $UNIT_NAME на порт $port"
+	else
+		mkdir -p "$UNIT_DIR"
+		# PATH задаємо явно: bun зазвичай у ~/.bun/bin, якого в оточенні
+		# systemd немає, і обгортка падає з "exec: bun: not found".
+		cat > "$unit_path" <<EOF
+[Unit]
+# Створено $KIT/install.sh — правки тут переживуть лише до наступного запуску.
+Description=Backlog.md queue UI — $(basename "$TARGET")
+After=network.target
+
+[Service]
+Environment=PATH=$(dirname "$(command -v bun)"):/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=$TARGET
+ExecStart=$TARGET/bin/backlog browser --no-open --port $port
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+		add "$UNIT_NAME (порт $port)"
+		systemctl --user daemon-reload
+
+		if [[ -f "$TARGET/backlog/config.yml" ]]; then
+			systemctl --user enable "$UNIT_NAME" >/dev/null 2>&1
+			systemctl --user restart "$UNIT_NAME"
+			for _ in 1 2 3 4 5 6 7 8 9 10; do
+				port_busy "$port" && break
+				sleep 1
+			done
+			if port_busy "$port"; then
+				add "UI піднято: http://127.0.0.1:$port/"
+			else
+				echo "  ! сервіс не відповів на $port — подивіться:"
+				echo "    journalctl --user -u $UNIT_NAME -n 30"
+			fi
+			if [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" != "yes" ]]; then
+				echo "  ! черга зупиниться при виході з системи. Щоб жила завжди:"
+				echo "    sudo loginctl enable-linger $(id -un)"
+			fi
+		else
+			echo "  = чергу ще не ініціалізовано, сервіс не вмикаю"
+			echo "    після кроку 1 нижче повторіть: $KIT/install.sh --update $TARGET"
+		fi
+	fi
+fi
+
 # --- решта ------------------------------------------------------------------
 if [[ "$MODE" == update ]]; then
 	cat <<EOF
@@ -226,6 +362,8 @@ if [[ "$MODE" == update ]]; then
 
 Новий текст скіла й зміни в settings.json почнуть діяти з **наступної** сесії
 Claude Code.
+
+Веб-UI: \`systemctl --user status $UNIT_NAME\`, логи — \`journalctl --user -u $UNIT_NAME\`.
 EOF
 else
 	cat <<EOF
@@ -258,6 +396,9 @@ else
 
 Гачок почне діяти з **наступної** сесії Claude Code: settings.json читається
 при старті.
+
+Веб-UI тримає systemd-юніт користувача: \`systemctl --user status $UNIT_NAME\`,
+логи — \`journalctl --user -u $UNIT_NAME\`.
 EOF
 
 	if [[ ${#existing[@]} -gt 0 ]]; then
