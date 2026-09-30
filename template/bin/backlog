@@ -6,7 +6,7 @@
 # readable nor patchable. The clone lives next to the project, not inside it.
 #
 # Setup (see .claude/skills/queue/SKILL.md):
-#   git clone --branch v1.50.1 --depth 1 https://github.com/MrLesk/Backlog.md.git /data/backlog.md
+#   git clone --branch v1.53.0 --depth 1 https://github.com/MrLesk/Backlog.md.git /data/backlog.md
 #   cd /data/backlog.md && bun install --frozen-lockfile --omit=optional
 #
 # `--omit=optional` skips the six per-platform standalone binaries; the CLI runs
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 BACKLOG_MD_HOME="${BACKLOG_MD_HOME:-/data/backlog.md}"
-BACKLOG_MD_TAG="v1.50.1"
+BACKLOG_MD_TAG="v1.53.0"
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

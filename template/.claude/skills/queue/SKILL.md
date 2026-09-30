@@ -31,9 +31,9 @@ description: Черга задач проєкту на Backlog.md — що ро�
 
 Правити файли `backlog/` руками не можна не з міркувань охайності: CLI
 **перезаписує frontmatter із власної моделі** й мовчки викидає чужі ключі
-(перевірено на v1.50.1). Тіло markdown виживає, але порядок секцій належить
-CLI. Прямі правки стереже гачок `.claude/hooks/enforce-queue-cli.py` — він
-відповість `deny` з підказкою, яку команду кликати замість цього.
+(перевірено на v1.50.1 і v1.53.0). Тіло markdown виживає, але порядок секцій
+належить CLI. Прямі правки стереже гачок `.claude/hooks/enforce-queue-cli.py` —
+він відповість `deny` з підказкою, яку команду кликати замість цього.
 
 Винятків три, і причини в них різні:
 
@@ -271,7 +271,7 @@ ID видається при створенні й **не перенумеров
 ## Встановлення й версія
 
 ```bash
-git clone --branch v1.50.1 --depth 1 https://github.com/MrLesk/Backlog.md.git /data/backlog.md
+git clone --branch v1.53.0 --depth 1 https://github.com/MrLesk/Backlog.md.git /data/backlog.md
 cd /data/backlog.md && bun install --frozen-lockfile --omit=optional
 ```
 

@@ -31,7 +31,7 @@ set -euo pipefail
 
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKLOG_MD_HOME="${BACKLOG_MD_HOME:-/data/backlog.md}"
-BACKLOG_MD_TAG="v1.50.1"
+BACKLOG_MD_TAG="v1.53.0"
 
 # Файли, які належать проєкту, а не комплекту: `--update` їх не чіпає, але
 # створює, якщо їх ще немає (проєкт, поставлений старішою версією комплекту).

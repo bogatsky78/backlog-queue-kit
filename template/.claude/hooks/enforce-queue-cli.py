@@ -5,9 +5,10 @@ PreToolUse guard for the project task queue in `backlog/`.
 The queue is driven by the Backlog.md CLI through `bin/backlog`. Task, draft,
 doc, decision and milestone files are the CLI's own storage: it rewrites the
 frontmatter from its internal model on every edit, so anything written into
-those files by hand is dropped without a word. (Verified on v1.50.1: custom
-frontmatter keys vanish on the next `task edit`. The markdown body survives,
-but the CLI owns the section order, so hand-editing is still a coin flip.)
+those files by hand is dropped without a word. (Verified on v1.50.1 and
+v1.53.0: custom frontmatter keys vanish on the next `task edit`. The markdown
+body survives, but the CLI owns the section order, so hand-editing is still a
+coin flip.)
 
 Three checks:
 
@@ -74,10 +75,12 @@ PROTECTED_ROOT = os.path.join(PROJECT_ROOT, "backlog")
 # explanations live in .claude/skills/queue/SKILL.md instead.
 #
 # Docs and decisions are stub-and-free-body: `doc create` / `decision create`
-# take a title and nothing else — there is no content flag, and no later command
-# ever rewrites the body (verified on v1.50.1: hand-written text survives every
-# doc/decision/search command and gets indexed by search). Guarding them would
-# make both features unusable, since hand-editing is the only way to fill them.
+# take a title and nothing else — there is no content flag at creation.
+# Decisions have no later command that touches the body; docs have
+# `doc update --content`, which replaces it whole (verified on v1.50.1 and
+# v1.53.0: hand-written text survives every other doc/decision/search command
+# and gets indexed by search). For decisions hand-editing is the only way to
+# fill them, for docs it is a convenience; guarding either would cost that.
 #
 # Tasks, drafts, completed and archive stay protected: those DO have full CLI
 # write paths (--plan, --ac, --append-notes, --final-summary, status), and there
