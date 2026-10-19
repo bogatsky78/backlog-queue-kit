@@ -1,0 +1,351 @@
+diff --git a/src/web/components/TaskList.tsx b/src/web/components/TaskList.tsx
+index 90d04b2..7ae0248 100644
+--- a/src/web/components/TaskList.tsx
++++ b/src/web/components/TaskList.tsx
+@@ -9,6 +9,7 @@ import type {
+ import { DEFAULT_STATUSES } from "../../constants/index.ts";
+ import { collectAvailableLabels } from "../../utils/label-filter.ts";
+ import { compareTaskIds, compareTaskIdsDescending } from "../../utils/task-sorting.ts";
++import { buildTaskTree, visibleTaskTreeRows } from "../../utils/task-tree.ts";
+ import { isTerminalStatus } from "../../utils/terminal-status.ts";
+ import { collectArchivedMilestoneKeys, getMilestoneLabel, milestoneKey } from "../utils/milestones";
+ import { parseStoredUtcDate } from "../utils/date-display";
+@@ -48,6 +49,26 @@ type SortDirection = "asc" | "desc";
+ // the content area has left, so the table fits a laptop viewport instead of overflowing it.
+ const TASK_COLUMN_WIDTHS_REM: readonly (number | null)[] = [6, null, 6.5, 6.5, 6, 8, 6.5, 8, 6];
+ 
++// Which parents are collapsed survives a reload, per browser; nothing is written to the tasks.
++const COLLAPSED_TASKS_STORAGE_KEY = "backlog.taskList.collapsed";
++
++function readCollapsedTaskIds(): Set<string> {
++	try {
++		const stored = JSON.parse(localStorage.getItem(COLLAPSED_TASKS_STORAGE_KEY) ?? "[]");
++		return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : []);
++	} catch {
++		return new Set();
++	}
++}
++
++function writeCollapsedTaskIds(ids: ReadonlySet<string>): void {
++	try {
++		localStorage.setItem(COLLAPSED_TASKS_STORAGE_KEY, JSON.stringify([...ids]));
++	} catch {
++		// Storage unavailable: collapsing still works for this page view.
++	}
++}
++
+ // Below this the table scrolls horizontally rather than crushing the columns.
+ const TASK_TITLE_MIN_WIDTH_REM = 12;
+ const TASK_TABLE_MIN_WIDTH_REM = TASK_COLUMN_WIDTHS_REM.reduce<number>(
+@@ -681,6 +702,37 @@ const TaskList: React.FC<TaskListProps> = ({
+ 
+ 	const currentCount = sortedDisplayTasks.length;
+ 
++	const [collapsedTaskIds, setCollapsedTaskIds] = useState<Set<string>>(readCollapsedTaskIds);
++	const taskTreeRows = useMemo(
++		() => buildTaskTree(sortedDisplayTasks, statusOptions),
++		[sortedDisplayTasks, statusOptions],
++	);
++	const visibleTreeRows = useMemo(
++		() => visibleTaskTreeRows(taskTreeRows, collapsedTaskIds),
++		[taskTreeRows, collapsedTaskIds],
++	);
++	const parentTaskIds = useMemo(
++		() => taskTreeRows.filter((row) => row.childCount > 0).map((row) => row.task.id),
++		[taskTreeRows],
++	);
++
++	const updateCollapsedTaskIds = (next: Set<string>) => {
++		setCollapsedTaskIds(next);
++		writeCollapsedTaskIds(next);
++	};
++
++	const toggleCollapsed = (taskId: string) => {
++		const next = new Set(collapsedTaskIds);
++		if (next.has(taskId)) next.delete(taskId);
++		else next.add(taskId);
++		updateCollapsedTaskIds(next);
++	};
++
++	// Collapse-all keeps ids of parents hidden by the current filters, so clearing a filter does not
++	// silently expand what the user had folded.
++	const collapseAll = () => updateCollapsedTaskIds(new Set([...collapsedTaskIds, ...parentTaskIds]));
++	const expandAll = () => updateCollapsedTaskIds(new Set());
++
+ 	useEffect(() => {
+ 		const headerEl = tableHeaderScrollRef.current;
+ 		const bodyEl = tableBodyScrollRef.current;
+@@ -781,6 +833,33 @@ const TaskList: React.FC<TaskListProps> = ({
+ 					</div>
+ 
+ 					<div className="flex items-center gap-3 flex-shrink-0">
++						{parentTaskIds.length > 0 && (
++							<div className="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden" data-tree-controls>
++								<button
++									type="button"
++									onClick={collapseAll}
++									className="p-2 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
++									title="Collapse all subtasks"
++									aria-label="Collapse all subtasks"
++								>
++									<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
++										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4l5 5 5-5M7 20l5-5 5 5" />
++									</svg>
++								</button>
++								<button
++									type="button"
++									onClick={expandAll}
++									className="p-2 border-l border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
++									title="Expand all subtasks"
++									aria-label="Expand all subtasks"
++								>
++									<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
++										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 9l5-5 5 5M7 15l5 5 5-5" />
++									</svg>
++								</button>
++							</div>
++						)}
++
+ 						{isFilteringTerminalStatus && currentCount > 0 && (
+ 								<button
+ 									type="button"
+@@ -858,8 +937,9 @@ const TaskList: React.FC<TaskListProps> = ({
+ 						<table className="w-full table-fixed border-collapse" style={{ minWidth: `${TASK_TABLE_MIN_WIDTH_REM}rem` }}>
+ 							{renderColumnGroup()}
+ 							<tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+-								{sortedDisplayTasks.map((task) => {
++								{visibleTreeRows.map(({ task, depth, childCount, completedChildCount }) => {
+ 									const isFromOtherBranch = Boolean(task.branch);
++									const isCollapsed = childCount > 0 && collapsedTaskIds.has(task.id);
+ 									const visibleLabels = task.labels.slice(0, 2);
+ 									const labelOverflow = Math.max(task.labels.length - visibleLabels.length, 0);
+ 									const visibleAssignees = task.assignee.slice(0, 2);
+@@ -880,6 +960,35 @@ const TaskList: React.FC<TaskListProps> = ({
+ 												{task.id}
+ 											</td>
+ 											<td className="px-3 py-2.5">
++												{/* The tree lives in the Title column, the only flexible one: indenting the fixed-width
++												    ID column would push the table past the laptop width budget. */}
++												<div style={{ paddingLeft: `${depth * 1.25}rem` }}>
++												<div className="flex items-center gap-1 min-w-0">
++													{childCount > 0 ? (
++														<button
++															type="button"
++															onClick={(event) => {
++																event.stopPropagation();
++																toggleCollapsed(task.id);
++															}}
++															className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-600 dark:hover:text-gray-100"
++															aria-expanded={!isCollapsed}
++															aria-label={`${isCollapsed ? "Expand" : "Collapse"} subtasks of ${task.id}`}
++															title={`${completedChildCount} of ${childCount} subtasks complete`}
++														>
++															<svg
++																className={`h-3 w-3 transition-transform ${isCollapsed ? "" : "rotate-90"}`}
++																fill="none"
++																stroke="currentColor"
++																viewBox="0 0 24 24"
++																aria-hidden="true"
++															>
++																<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" />
++															</svg>
++														</button>
++													) : (
++														<span className="inline-block h-4 w-4 shrink-0" aria-hidden="true" />
++													)}
+ 												<div className="flex items-center gap-2 min-w-0">
+ 													<button
+ 														type="button"
+@@ -906,12 +1015,24 @@ const TaskList: React.FC<TaskListProps> = ({
+ 														</span>
+ 													)}
+ 												</div>
++													{isCollapsed && (
++														<span
++															className="shrink-0 rounded-circle bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-700 dark:text-gray-400"
++															title={`${completedChildCount} of ${childCount} subtasks complete`}
++														>
++															{completedChildCount}/{childCount}
++														</span>
++													)}
++												</div>
++												<div className="pl-5">
+ 												<AcceptanceCriteriaProgress task={task} density="list" className="mt-1" />
+ 												{task.dueDate && (
+ 													<div className="mt-1 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+ 														Due: <StoredDate value={task.dueDate} dateFormat={dateFormat} />
+ 													</div>
+ 												)}
++												</div>
++												</div>
+ 											</td>
+ 											<td className="px-3 py-2.5">
+ 												<span className={`inline-flex rounded-circle px-2 py-0.5 text-[11px] font-medium ${getStatusColor(task.status)}`}>
+diff --git a/src/utils/task-tree.ts b/src/utils/task-tree.ts
+new file mode 100644
+index 0000000..cf573d5
+--- /dev/null
++++ b/src/utils/task-tree.ts
+@@ -0,0 +1,68 @@
++import type { Task } from "../types/index.ts";
++import { taskIdsEqual } from "./task-id.ts";
++import { isTerminalStatus } from "./terminal-status.ts";
++
++export interface TaskTreeRow {
++	task: Task;
++	depth: number;
++	/** Direct subtasks present in the same list, i.e. what collapsing this row hides one level down. */
++	childCount: number;
++	completedChildCount: number;
++}
++
++/**
++ * Lays an already filtered and sorted list out as a tree: a subtask goes under its parent only when the
++ * parent is in the list too, otherwise it stays a top-level row rather than disappearing behind a filter.
++ * Siblings keep the order they had in the input, so the list's sort applies on every level.
++ */
++export function buildTaskTree(tasks: readonly Task[], statuses: readonly string[]): TaskTreeRow[] {
++	const parentOf = new Map<Task, Task>();
++	const children = new Map<Task, Task[]>();
++	for (const task of tasks) {
++		if (!task.parentTaskId) continue;
++		const parentId = task.parentTaskId;
++		const parent = tasks.find((candidate) => candidate !== task && taskIdsEqual(parentId, candidate.id));
++		if (!parent) continue;
++		parentOf.set(task, parent);
++		const siblings = children.get(parent);
++		if (siblings) siblings.push(task);
++		else children.set(parent, [task]);
++	}
++
++	const rows: TaskTreeRow[] = [];
++	const visited = new Set<Task>();
++	const visit = (task: Task, depth: number) => {
++		if (visited.has(task)) return;
++		visited.add(task);
++		const direct = children.get(task) ?? [];
++		rows.push({
++			task,
++			depth,
++			childCount: direct.length,
++			completedChildCount: direct.filter((child) => isTerminalStatus(child.status, statuses)).length,
++		});
++		for (const child of direct) visit(child, depth + 1);
++	};
++
++	for (const task of tasks) {
++		if (!parentOf.has(task)) visit(task, 0);
++	}
++	// A parent cycle has no root to start from; show its members flat rather than drop them.
++	for (const task of tasks) visit(task, 0);
++	return rows;
++}
++
++/** Drops the rows that sit below a collapsed row. */
++export function visibleTaskTreeRows(rows: readonly TaskTreeRow[], collapsedIds: ReadonlySet<string>): TaskTreeRow[] {
++	const visible: TaskTreeRow[] = [];
++	let hiddenBelow: number | null = null;
++	for (const row of rows) {
++		if (hiddenBelow !== null) {
++			if (row.depth > hiddenBelow) continue;
++			hiddenBelow = null;
++		}
++		visible.push(row);
++		if (row.childCount > 0 && collapsedIds.has(row.task.id)) hiddenBelow = row.depth;
++	}
++	return visible;
++}
+diff --git a/src/test/task-tree.test.ts b/src/test/task-tree.test.ts
+new file mode 100644
+index 0000000..87492f9
+--- /dev/null
++++ b/src/test/task-tree.test.ts
+@@ -0,0 +1,88 @@
++import { describe, expect, it } from "bun:test";
++import type { Task } from "../types/index.ts";
++import { buildTaskTree, visibleTaskTreeRows } from "../utils/task-tree.ts";
++
++const STATUSES = ["To Do", "In Progress", "Done"] as const;
++
++function makeTask(id: string, status: string, parentTaskId?: string): Task {
++	return {
++		id,
++		title: `Task ${id}`,
++		status,
++		assignee: [],
++		createdDate: "2026-10-20",
++		labels: [],
++		dependencies: [],
++		rawContent: "",
++		...(parentTaskId ? { parentTaskId } : {}),
++	} as Task;
++}
++
++const layout = (rows: ReturnType<typeof buildTaskTree>) => rows.map((row) => `${"  ".repeat(row.depth)}${row.task.id}`);
++
++describe("buildTaskTree", () => {
++	it("nests subtasks under their parent across several levels", () => {
++		const tasks = [
++			makeTask("TASK-7.2.2", "To Do", "TASK-7.2"),
++			makeTask("TASK-9", "In Progress"),
++			makeTask("TASK-7.2", "In Progress", "TASK-7"),
++			makeTask("TASK-7", "In Progress"),
++			makeTask("TASK-7.2.1", "Done", "TASK-7.2"),
++		];
++		const rows = buildTaskTree(tasks, STATUSES);
++		expect(layout(rows)).toEqual(["TASK-9", "TASK-7", "  TASK-7.2", "    TASK-7.2.2", "    TASK-7.2.1"]);
++		const frame = rows.find((row) => row.task.id === "TASK-7.2");
++		expect(frame?.childCount).toBe(2);
++		expect(frame?.completedChildCount).toBe(1);
++	});
++
++	it("keeps the input order among siblings", () => {
++		const tasks = [
++			makeTask("TASK-2", "To Do"),
++			makeTask("TASK-2.3", "To Do", "TASK-2"),
++			makeTask("TASK-2.1", "To Do", "TASK-2"),
++			makeTask("TASK-2.2", "To Do", "TASK-2"),
++		];
++		expect(layout(buildTaskTree(tasks, STATUSES))).toEqual(["TASK-2", "  TASK-2.3", "  TASK-2.1", "  TASK-2.2"]);
++	});
++
++	it("keeps a subtask visible when its parent is filtered out", () => {
++		const tasks = [makeTask("TASK-7.2.2", "To Do", "TASK-7.2"), makeTask("TASK-3", "To Do")];
++		const rows = buildTaskTree(tasks, STATUSES);
++		expect(layout(rows)).toEqual(["TASK-7.2.2", "TASK-3"]);
++		expect(rows.every((row) => row.childCount === 0)).toBe(true);
++	});
++
++	it("shows tasks caught in a parent cycle instead of dropping them", () => {
++		const tasks = [makeTask("TASK-1", "To Do", "TASK-2"), makeTask("TASK-2", "To Do", "TASK-1")];
++		expect(buildTaskTree(tasks, STATUSES)).toHaveLength(2);
++	});
++});
++
++describe("visibleTaskTreeRows", () => {
++	const tasks = [
++		makeTask("TASK-7", "In Progress"),
++		makeTask("TASK-7.2", "In Progress", "TASK-7"),
++		makeTask("TASK-7.2.1", "To Do", "TASK-7.2"),
++		makeTask("TASK-7.1", "To Do", "TASK-7"),
++		makeTask("TASK-9", "To Do"),
++	];
++	const rows = buildTaskTree(tasks, STATUSES);
++
++	it("hides every descendant of a collapsed row", () => {
++		expect(layout(visibleTaskTreeRows(rows, new Set(["TASK-7"])))).toEqual(["TASK-7", "TASK-9"]);
++	});
++
++	it("hides only the collapsed branch", () => {
++		expect(layout(visibleTaskTreeRows(rows, new Set(["TASK-7.2"])))).toEqual([
++			"TASK-7",
++			"  TASK-7.2",
++			"  TASK-7.1",
++			"TASK-9",
++		]);
++	});
++
++	it("ignores a collapsed id that has no children in the list", () => {
++		expect(visibleTaskTreeRows(rows, new Set(["TASK-9", "TASK-7.2.1"]))).toHaveLength(5);
++	});
++});

@@ -40,6 +40,24 @@ if [[ "$checked_out" != "$BACKLOG_MD_TAG" ]]; then
 	exit 1
 fi
 
+# Local patches on top of the pinned tag, until upstream takes them. They stay
+# uncommitted in the checkout: a commit would move HEAD off the tag and trip the
+# check above. Each run makes sure every patch is in; one that no longer applies
+# (after a tag bump) stops the queue rather than leaving the feature silently gone.
+PATCH_DIR="$PROJECT_ROOT/.claude/backlog-md-patches"
+for patch in "$PATCH_DIR"/*.patch; do
+	[[ -e "$patch" ]] || continue
+	if git -C "$BACKLOG_MD_HOME" apply --reverse --check "$patch" 2>/dev/null; then
+		continue
+	fi
+	if ! git -C "$BACKLOG_MD_HOME" apply "$patch" 2>/dev/null; then
+		echo "bin/backlog: $(basename "$patch") does not apply to $BACKLOG_MD_TAG in $BACKLOG_MD_HOME" >&2
+		echo "  port the patch to this tag, or delete it if upstream already has the change" >&2
+		exit 1
+	fi
+	echo "bin/backlog: applied $(basename "$patch") to $BACKLOG_MD_HOME" >&2
+done
+
 # BACKLOG_CWD makes the queue independent of where the CLI was called from:
 # every invocation targets this repository's backlog/ directory. That in turn
 # frees us to run from the checkout, which is where the CLI looks for its own
